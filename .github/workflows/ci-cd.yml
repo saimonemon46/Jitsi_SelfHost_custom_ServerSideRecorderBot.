@@ -1,0 +1,184 @@
+name: CI/CD Pipeline - Jitsi Server-Side Recorder Bot
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ============================================================================
+  # 1. Code Quality, Syntax Validation & Unit Tests
+  # ============================================================================
+  validate-and-test:
+    name: Code Quality & Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: recorder/package.json
+
+      - name: Install Node.js Dependencies
+        run: |
+          cd recorder
+          npm ci || npm install
+
+      - name: Validate Shell Scripts Syntax
+        run: |
+          echo "Checking shell scripts with bash -n..."
+          bash -n check-environment.sh
+          bash -n start-demo.sh
+          bash -n test-recorder.sh
+          bash -n simulate-host-disconnect.sh
+          bash -n recorder/entrypoint.sh
+          bash -n jitsi/gen-passwords.sh
+          echo "✔ All shell scripts passed syntax checks."
+
+      - name: Validate JavaScript Syntax
+        run: |
+          echo "Checking JavaScript files with node --check..."
+          node --check recorder/src/api/server.js
+          node --check recorder/src/browser/jitsi.js
+          node --check recorder/src/capture/audio.js
+          node --check recorder/src/capture/display.js
+          node --check recorder/src/ffmpeg/recorder.js
+          node --check recorder/src/state/state-manager.js
+          node --check recorder/src/storage/filesystem.js
+          node --check recorder/src/worker/recorder.js
+          echo "✔ All JavaScript modules passed syntax verification."
+
+      - name: Run Unit Tests
+        run: |
+          cd recorder
+          npm test
+
+      - name: Validate Docker Compose Configurations
+        run: |
+          echo "Validating Docker Compose YAML schemas..."
+          docker compose -f jitsi/docker-compose.yml config > /dev/null
+          docker compose -f recorder/docker-compose.yml config > /dev/null
+          echo "✔ Docker Compose configurations are valid."
+
+  # ============================================================================
+  # 2. Container Build & Health Smoke Test
+  # ============================================================================
+  build-and-test-docker:
+    name: Build Container & Smoke Test
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Recorder Image (Local Cache)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./recorder
+          file: ./recorder/Dockerfile
+          load: true
+          tags: jitsi-recorder-bot:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Container Smoke Test
+        run: |
+          echo "Starting test container in background..."
+          docker run -d \
+            --name recorder-smoke-test \
+            -p 3000:3000 \
+            -e RECORDER_API_KEY=test-api-key \
+            jitsi-recorder-bot:test
+
+          echo "Waiting for Recorder API /health endpoint..."
+          READY=0
+          for i in {1..20}; do
+            STATUS=$(curl -s http://localhost:3000/health || echo "")
+            if echo "$STATUS" | grep -q '"status":"healthy"'; then
+              echo "✔ Recorder API health probe returned healthy: $STATUS"
+              READY=1
+              break
+            fi
+            echo "Waiting for container initialization ($i/20)..."
+            sleep 2
+          done
+
+          if [ $READY -ne 1 ]; then
+            echo "✘ Health probe failed. Container logs:"
+            docker logs recorder-smoke-test
+            exit 1
+          fi
+
+          echo "Checking container metrics endpoint..."
+          curl -s http://localhost:3000/metrics | grep -q 'recordings_started'
+          echo "✔ Metrics endpoint verified."
+
+      - name: Cleanup Smoke Test Container
+        if: always()
+        run: |
+          docker rm -f recorder-smoke-test || true
+
+  # ============================================================================
+  # 3. Continuous Delivery: Publish Image to GitHub Container Registry (GHCR)
+  # ============================================================================
+  publish-image:
+    name: Publish to GHCR
+    needs: [validate-and-test, build-and-test-docker]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata (Tags & Labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=sha,prefix=sha-,enable=true
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and Push Docker Image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: ./recorder
+          file: ./recorder/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

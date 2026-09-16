@@ -23,15 +23,16 @@ services:
       - MIN_DISK_SPACE_MB=1024
       - BOT_DISPLAY_NAME=Course Recorder
     volumes:
+      - ./src:/app/src:ro
       - ./recordings:/recordings:rw
       - ./logs:/app/logs:rw
     # Resource constraints to prevent recorder from consuming all host RAM/CPU (Phase 18)
     deploy:
       resources:
         limits:
-          cpus: '4.0'
-          memory: 4096M
+          cpus: '6.0'
+          memory: 8192M
         reservations:
-          cpus: '1.0'
-          memory: 1024M
-    shm_size: '2gb' # Generous shared memory for Chromium browser tabs
+          cpus: '2.0'
+          memory: 2048M
+    shm_size: '4gb' # Generous shared memory for Chromium browser tabs

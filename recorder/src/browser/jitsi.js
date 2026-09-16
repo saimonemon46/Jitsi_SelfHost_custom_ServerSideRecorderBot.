@@ -37,11 +37,22 @@ export class JitsiBot extends EventEmitter {
       'config.disableThirdPartyRequests=true',
       'config.analytics.disabled=true',
       'config.p2p.enabled=false', // Ensure traffic goes through JVB so recordings stay stable
-      'config.hideConferenceSubject=true',
-      'config.filmstrip.disableStageFilmstrip=false',
+      'config.channelLastN=3', // In a 500-user session, receive at most 3 video streams (screen share + presenters)
+      'config.disableTileView=true', // Keep full-screen stage mode for crisp 1080p presentation
+      'config.filmstrip.disableStageFilmstrip=true', // Prevent filmstrip from overlaying on top of slides
+      'config.disableChat=true', // Suppress chat sidebar & notifications
+      'config.disablePolls=true', // Suppress poll dialogs
+      'config.disableReactions=true', // Suppress floating reaction emojis
+      'config.disableNotifications=true', // Suppress all popup banners/toasts
+      'config.hideConferenceSubject=true', // Clean recording without header text
+      'config.hideConferenceTimer=true', // Clean recording without timer overlay
+      'config.resolution=1080', // Prefer 1080p from JVB
+      'config.constraints.video.height.ideal=1080',
+      'config.disableAutoPinOnScreenShare=false', // Auto-focus screen share when presenter starts sharing
       'interfaceConfig.SHOW_JITSI_WATERMARK=false',
       'interfaceConfig.SHOW_WATERMARK_FOR_GUESTS=false',
-      'interfaceConfig.DISABLE_JOIN_LEAVE_NOTIFICATIONS=true'
+      'interfaceConfig.DISABLE_JOIN_LEAVE_NOTIFICATIONS=true',
+      'interfaceConfig.TOOLBAR_BUTTONS=[]' // Hide bottom toolbar buttons for a broadcast-ready recording
     ];
 
     // Combine existing hash if present
@@ -130,8 +141,8 @@ export class JitsiBot extends EventEmitter {
     this.isConnected = true;
     console.log(`${new Date().toISOString()} [jitsi.joined] Recorder bot successfully joined conference as '${this.displayName}'`);
 
-    // Ensure tile view layout so all participants are framed nicely
-    await this.setTileViewLayout();
+    // Ensure stage layout (Tile View disabled) and auto-focus presentation/screen share
+    await this.configureStageLayout();
 
     // Start polling conference connection status
     this.startStatusMonitor();
@@ -206,12 +217,26 @@ export class JitsiBot extends EventEmitter {
     return false;
   }
 
-  async setTileViewLayout() {
+  async configureStageLayout() {
     try {
       await this.page.evaluate(() => {
-        // Trigger tile view mode if available
-        if (window.APP?.UI?.isTileViewEnabled && !window.APP.UI.isTileViewEnabled()) {
+        // Ensure Tile View is OFF so screen share and active presenter take the full 1080p canvas
+        if (window.APP?.UI?.isTileViewEnabled?.()) {
           window.APP.UI.toggleTileView();
+        }
+
+        // Inject custom CSS to ensure a completely clean broadcast without UI overlays
+        const styleId = 'recorder-clean-broadcast-style';
+        if (!document.getElementById(styleId)) {
+          const style = document.createElement('style');
+          style.id = styleId;
+          style.innerHTML = `
+            .reactions-menu-popup, .reactions-animations-container { display: none !important; }
+            .subject-text--header, #conference_timer { display: none !important; }
+            .toolbox-content { opacity: 0 !important; pointer-events: none !important; }
+            #largeVideoContainer, #largeVideo { width: 100% !important; height: 100% !important; max-height: 100% !important; }
+          `;
+          document.head.appendChild(style);
         }
       });
     } catch (err) {
@@ -229,6 +254,27 @@ export class JitsiBot extends EventEmitter {
         const status = await this.page.evaluate(() => {
           const joined = Boolean(window.APP?.conference?.isJoined?.());
           const participants = window.APP?.conference?.getParticipants?.() || [];
+
+          // Guard against Tile View turning on and ensure screen share is pinned to large video
+          try {
+            if (window.APP?.UI?.isTileViewEnabled?.()) {
+              window.APP.UI.toggleTileView();
+            }
+
+            const conf = window.APP?.conference;
+            if (conf) {
+              const allParticipants = conf.getParticipants?.() || [];
+              for (const p of allParticipants) {
+                const pTracks = p.getTracks?.() || [];
+                const screenTrack = pTracks.find(t => t.videoType === 'desktop');
+                if (screenTrack && conf.getLargeVideoParticipantId?.() !== p.getId()) {
+                  conf.selectParticipant?.(p.getId());
+                  break;
+                }
+              }
+            }
+          } catch {}
+
           return {
             joined,
             participantCount: participants.length

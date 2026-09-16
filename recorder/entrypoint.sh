@@ -4,13 +4,9 @@ set -e
 echo "=== Initializing Recorder Bot Environment ==="
 
 # 1. Start PulseAudio daemon in user/isolated mode
-export PULSE_SERVER=unix:/tmp/pulse-socket
-mkdir -p /tmp/pulse-runtime
-chmod 700 /tmp/pulse-runtime
-
 echo "Starting PulseAudio daemon..."
 pulseaudio --kill 2>/dev/null || true
-pulseaudio -D --exit-idle-time=-1 --disallow-exit --disallow-module-loading=0 --system=false
+pulseaudio --start --exit-idle-time=-1 --disallow-exit
 
 # Wait for PulseAudio
 for i in {1..10}; do

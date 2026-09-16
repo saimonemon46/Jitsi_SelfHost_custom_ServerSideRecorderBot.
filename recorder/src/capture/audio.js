@@ -20,7 +20,7 @@ export class AudioManager {
     if (!this.isPulseRunning()) {
       console.log(`${new Date().toISOString()} [audio.daemon] Pulse daemon not active. Starting local pulseaudio...`);
       try {
-        execSync('pulseaudio -D --exit-idle-time=-1 --disallow-exit --disallow-module-loading=0', { stdio: 'ignore' });
+        execSync('pulseaudio --start --exit-idle-time=-1 --disallow-exit', { stdio: 'ignore' });
       } catch (err) {
         console.warn(`${new Date().toISOString()} [audio.daemon.warning] Error starting pulseaudio daemon: ${err.message}`);
       }

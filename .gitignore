@@ -1,0 +1,11 @@
+.env
+.env.bak
+node_modules/
+recordings/
+*.log
+jitsi-cfg/
+jitsi/.env
+jitsi/.env.bak
+recorder/.env
+recorder/recordings/
+recorder/logs/

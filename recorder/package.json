@@ -1,0 +1,16 @@
+{
+  "name": "jitsi-custom-recorder",
+  "version": "1.0.0",
+  "description": "Server-side Jitsi meeting recorder using Chromium, Playwright, Xvfb, PulseAudio, and FFmpeg",
+  "main": "src/api/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/api/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "playwright": "^1.49.1"
+  }
+}

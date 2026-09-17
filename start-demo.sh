@@ -22,11 +22,11 @@ echo -e "${BOLD}${CYAN}=========================================================
 echo -e "\n${BOLD}[1/4] Running Environment Audit...${NC}"
 ./check-environment.sh
 
-# Step 2: Start Jitsi Stack
-echo -e "\n${BOLD}[2/4] Starting Jitsi Meet Cluster (Web, Prosody, Jicofo, JVB)...${NC}"
+# Step 2: Start Jitsi Stack + Jibri
+echo -e "\n${BOLD}[2/3] Starting Jitsi Meet Cluster + Jibri (Web, Prosody, Jicofo, JVB, Jibri)...${NC}"
 (
   cd "$SCRIPT_DIR/jitsi"
-  docker compose up -d web prosody jicofo jvb
+  docker compose up -d
 )
 
 echo "Waiting for Jitsi Meet HTTPS endpoint (https://meet.localhost/)..."
@@ -48,56 +48,43 @@ else
   echo -e "${YELLOW}Warning: Jitsi web endpoint is taking longer than usual to respond.${NC}"
 fi
 
-# Step 3: Start Recorder Service
-echo -e "\n${BOLD}[3/4] Starting Isolated Recorder Service (Chromium + Xvfb + PulseAudio + FFmpeg)...${NC}"
-(
-  cd "$SCRIPT_DIR/recorder"
-  docker compose up -d
-)
-
-echo "Waiting for Recorder API (http://localhost:3000/health)..."
+# Step 3: Verify Jibri Status
+echo -e "\n${BOLD}[3/3] Checking Jibri Health...${NC}"
 COUNT=0
-RECORDER_READY=0
+JIBRI_READY=0
 while [ $COUNT -lt $MAX_RETRIES ]; do
-  if curl -s http://localhost:3000/health | grep -q '"status":"healthy"'; then
-    RECORDER_READY=1
+  if docker exec jitsi-jibri-1 curl -s http://127.0.0.1:2222/jibri/api/v1.0/health 2>/dev/null | grep -q '"healthStatus":"HEALTHY"'; then
+    JIBRI_READY=1
     break
   fi
   COUNT=$((COUNT + 1))
   sleep 1
 done
 
-if [ $RECORDER_READY -eq 1 ]; then
-  echo -e "${GREEN}✔ Recorder API is healthy and listening on http://localhost:3000${NC}"
+if [ $JIBRI_READY -eq 1 ]; then
+  echo -e "${GREEN}✔ Jibri is healthy and ready to record (Status: IDLE).${NC}"
 else
-  echo -e "${YELLOW}Warning: Recorder API is taking longer than usual to respond.${NC}"
+  echo -e "${YELLOW}Notice: Jibri is still initializing. Check logs with 'docker compose logs -f jibri'.${NC}"
 fi
 
-# Step 4: Summary & Usage
-API_KEY=$(grep '^RECORDER_API_KEY=' "$SCRIPT_DIR/recorder/.env" 2>/dev/null | cut -d= -f2- || echo "local-dev-secret-key-123")
-
+# Summary & Usage
 echo -e "\n${BOLD}${GREEN}================================================================${NC}"
-echo -e "${BOLD}${GREEN}                   DEMO ENVIRONMENT READY                       ${NC}"
+echo -e "${BOLD}${GREEN}                   JITSI + JIBRI ENVIRONMENT READY              ${NC}"
 echo -e "${BOLD}${GREEN}================================================================${NC}"
 echo -e "${BOLD}Jitsi Web Interface:${NC}   https://meet.localhost"
-echo -e "${BOLD}Sample Test Room:${NC}       https://meet.localhost/demo-class"
-echo -e "${BOLD}Recorder API Base:${NC}     http://localhost:3000"
-echo -e "${BOLD}Recorder Health Probe:${NC} http://localhost:3000/health"
-echo -e "${BOLD}Recorder Metrics:${NC}      http://localhost:3000/metrics"
-echo -e "${BOLD}API Authorization Key:${NC} $API_KEY"
-echo -e "${BOLD}Recordings Storage:${NC}    $SCRIPT_DIR/recorder/recordings/<meeting_id>/"
+echo -e "${BOLD}Sample Test Room:${NC}       https://meet.localhost/test-recording"
+echo -e "${BOLD}Recordings Storage:${NC}    $SCRIPT_DIR/jitsi-cfg/storage/jibri/"
 echo -e "${CYAN}----------------------------------------------------------------${NC}"
-echo -e "${BOLD}Quick Test Commands:${NC}"
-echo -e "1. Run the end-to-end automated test:"
-echo -e "   ${YELLOW}./test-recorder.sh${NC}"
+echo -e "${BOLD}How to Test Recording:${NC}"
+echo -e "1. Open ${YELLOW}https://meet.localhost/test-recording${NC} in your browser."
+echo -e "2. In the bottom toolbar, click ${BOLD}⋮ (More actions)${NC}."
+echo -e "3. Click ${CYAN}Start recording${NC}."
+echo -e "4. When finished, click ${CYAN}Stop recording${NC}."
+echo -e "5. The saved MP4 will be in ${YELLOW}$SCRIPT_DIR/jitsi-cfg/storage/jibri/${NC}"
 echo -e ""
-echo -e "2. Or manually trigger recording via curl:"
-echo -e "   ${CYAN}curl -X POST http://localhost:3000/recordings/start \\"
-echo -e "     -H \"Content-Type: application/json\" \\"
-echo -e "     -H \"X-API-Key: ${API_KEY}\" \\"
-echo -e "     -d '{\"meeting_id\": \"demo-class\", \"room_url\": \"https://meet.localhost/demo-class\"}'${NC}"
-echo -e ""
-echo -e "3. Stop recording:"
-echo -e "   ${CYAN}curl -X POST http://localhost:3000/recordings/<RECORDING_ID>/stop \\"
-echo -e "     -H \"X-API-Key: ${API_KEY}\"${NC}"
+echo -e "${BOLD}Useful Commands:${NC}"
+echo -e "- View Jibri logs:   ${CYAN}docker compose -C jitsi logs -f jibri${NC}"
+echo -e "- Check container:   ${CYAN}docker compose -C jitsi ps${NC}"
+echo -e "- Stop all services: ${CYAN}docker compose -C jitsi down${NC}"
 echo -e "${BOLD}${GREEN}================================================================${NC}"
+

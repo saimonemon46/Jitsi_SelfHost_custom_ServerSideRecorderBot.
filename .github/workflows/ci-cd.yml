@@ -1,4 +1,4 @@
-name: CI/CD Pipeline - Jitsi Server-Side Recorder Bot
+name: CI/CD Pipeline - Jitsi Meet & Jibri Recording Infrastructure
 
 on:
   push:
@@ -10,34 +10,23 @@ on:
 
 permissions:
   contents: read
-  packages: write
-
-env:
-  REGISTRY: ghcr.io
 
 jobs:
   # ============================================================================
-  # 1. Code Quality, Syntax Validation & Unit Tests
+  # 1. Syntax Validation, Configuration & Schema Checks
   # ============================================================================
-  validate-and-test:
-    name: Code Quality & Unit Tests
+  validate-configuration:
+    name: Validate Scripts & Configurations
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20.x
+      - name: Set up Node.js 24.x
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: 'npm'
-          cache-dependency-path: recorder/package.json
-
-      - name: Install Node.js Dependencies
-        run: |
-          cd recorder
-          npm ci || npm install
+          node-version: 24
 
       - name: Validate Shell Scripts Syntax
         run: |
@@ -46,144 +35,52 @@ jobs:
           bash -n start-demo.sh
           bash -n test-recorder.sh
           bash -n simulate-host-disconnect.sh
-          bash -n recorder/entrypoint.sh
           bash -n jitsi/gen-passwords.sh
           echo "✔ All shell scripts passed syntax checks."
 
-      - name: Validate JavaScript Syntax
+      - name: Validate Custom JavaScript Configurations
         run: |
-          echo "Checking JavaScript files with node --check..."
-          node --check recorder/src/api/server.js
-          node --check recorder/src/browser/jitsi.js
-          node --check recorder/src/capture/audio.js
-          node --check recorder/src/capture/display.js
-          node --check recorder/src/ffmpeg/recorder.js
-          node --check recorder/src/state/state-manager.js
-          node --check recorder/src/storage/filesystem.js
-          node --check recorder/src/worker/recorder.js
-          echo "✔ All JavaScript modules passed syntax verification."
+          echo "Checking custom configuration scripts with node --check..."
+          node --check jitsi-config-templates/web/custom-config.js
+          node --check jitsi-config-templates/web/custom-interface_config.js
+          echo "✔ All custom JavaScript configurations passed syntax checks."
 
-      - name: Run Unit Tests
+      - name: Validate Template Files Existence
         run: |
-          cd recorder
-          npm test
+          echo "Verifying presence of Jibri PulseAudio and Web templates..."
+          test -f jitsi-config-templates/jibri/pulse-daemon.conf
+          test -f jitsi-config-templates/jibri/pulse-default.pa
+          test -f jitsi-config-templates/web/custom-config.js
+          test -f jitsi-config-templates/web/custom-interface_config.js
+          echo "✔ All essential templates are present."
 
-      - name: Validate Docker Compose Configurations
+      - name: Validate Docker Compose Schema
         run: |
           echo "Validating Docker Compose YAML schemas..."
-          docker compose -f jitsi/docker-compose.yml config > /dev/null
-          docker compose -f recorder/docker-compose.yml config > /dev/null
+          cp jitsi/env.example jitsi/.env
+          docker compose -f jitsi/docker-compose.yml -f jitsi/jibri.yml config > /dev/null
           echo "✔ Docker Compose configurations are valid."
 
   # ============================================================================
-  # 2. Container Build & Health Smoke Test
+  # 2. Integration Smoke Test
   # ============================================================================
-  build-and-test-docker:
-    name: Build Container & Smoke Test
-    needs: validate-and-test
+  smoke-test:
+    name: Environment & Compose Smoke Test
+    needs: validate-configuration
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Recorder Image (Local Cache)
-        uses: docker/build-push-action@v5
-        with:
-          context: ./recorder
-          file: ./recorder/Dockerfile
-          load: true
-          tags: jitsi-recorder-bot:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Run Container Smoke Test
+      - name: Run Environment Audit Script
         run: |
-          echo "Starting test container in background..."
-          docker run -d \
-            --name recorder-smoke-test \
-            -p 3000:3000 \
-            -e RECORDER_API_KEY=test-api-key \
-            jitsi-recorder-bot:test
+          echo "Running check-environment.sh..."
+          ./check-environment.sh
 
-          echo "Waiting for Recorder API /health endpoint..."
-          READY=0
-          for i in {1..20}; do
-            STATUS=$(curl -s http://localhost:3000/health || echo "")
-            if echo "$STATUS" | grep -q '"status":"healthy"'; then
-              echo "✔ Recorder API health probe returned healthy: $STATUS"
-              READY=1
-              break
-            fi
-            echo "Waiting for container initialization ($i/20)..."
-            sleep 2
-          done
-
-          if [ $READY -ne 1 ]; then
-            echo "✘ Health probe failed. Container logs:"
-            docker logs recorder-smoke-test
-            exit 1
-          fi
-
-          echo "Checking container metrics endpoint..."
-          curl -s http://localhost:3000/metrics | grep -q 'recordings_started'
-          echo "✔ Metrics endpoint verified."
-
-      - name: Cleanup Smoke Test Container
-        if: always()
+      - name: Verify Docker Compose Services Definition
         run: |
-          docker rm -f recorder-smoke-test || true
-
-  # ============================================================================
-  # 3. Continuous Delivery: Publish Image to GitHub Container Registry (GHCR)
-  # ============================================================================
-  publish-image:
-    name: Publish to GHCR
-    needs: [validate-and-test, build-and-test-docker]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute Clean Lowercase Image Name
-        id: image_name
-        run: |
-          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "image=${{ env.REGISTRY }}/${OWNER}/jitsi-recorder-bot" >> $GITHUB_OUTPUT
-
-      - name: Extract Docker metadata (Tags & Labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.image_name.outputs.image }}
-          tags: |
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=sha-,enable=true
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      - name: Build and Push Docker Image to GHCR
-        uses: docker/build-push-action@v5
-        with:
-          context: ./recorder
-          file: ./recorder/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cp jitsi/env.example jitsi/.env
+          echo "Listing defined compose services:"
+          docker compose -f jitsi/docker-compose.yml -f jitsi/jibri.yml config --services
+          echo "✔ All Jitsi and Jibri services verified."

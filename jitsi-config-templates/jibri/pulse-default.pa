@@ -1,0 +1,8 @@
+.include /etc/pulse/default.pa
+
+# Load the virtual sink with explicit 48000Hz stereo format matching WebRTC Opus
+load-module module-virtual-sink sink_name=jibri-loop sink_properties=device.description=jibri-loop rate=48000 format=s16le channels=2
+set-default-sink jibri-loop
+
+# Set the monitor of the jibri-loop sink to be the default source
+set-default-source jibri-loop.monitor

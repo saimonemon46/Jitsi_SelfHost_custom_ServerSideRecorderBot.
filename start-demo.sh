@@ -24,6 +24,8 @@ echo -e "\n${BOLD}[1/4] Running Environment Audit...${NC}"
 
 # Step 2: Start Jitsi Stack + Jibri
 echo -e "\n${BOLD}[2/3] Starting Jitsi Meet Cluster + Jibri (Web, Prosody, Jicofo, JVB, Jibri)...${NC}"
+mkdir -p "$SCRIPT_DIR/jitsi-cfg/web" "$SCRIPT_DIR/jitsi-cfg/jibri" "$SCRIPT_DIR/jitsi-cfg/storage/jibri/recordings"
+cp -r "$SCRIPT_DIR/jitsi-config-templates/"* "$SCRIPT_DIR/jitsi-cfg/"
 (
   cd "$SCRIPT_DIR/jitsi"
   docker compose up -d
